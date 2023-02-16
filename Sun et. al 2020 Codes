@@ -1,0 +1,316 @@
+# 1. commands used in this study.
+#####################
+# assemble the Illumina reads with Platanus v1.2.4
+platanus assemble -o SFG -f SFG_SE.fq SCG_trim_nr_1.fq SCG_trim_nr_2.fq -k 39 -s 10 -u 0.2 -t 29 -m 320
+platanus scaffold -o SFG -c SFG_platanus_contig.fa -b SFG_platanus_contigBubble.fa -IP1 SFG_trim_1.fq SFG_trim_2.fq -u 0.2 -t 29
+platanus gap_close -o SFG -c SFG_scaffold.fa -t 20 -f SFG_SE_total.fq -IP1 SFG_trim_1.fq SFG_trim_2.fq
+
+# assemble the ONT reads with canu
+canu -fast genomeSize=444m corMaxEvidenceErate=0.22 corMhapSensitivity=high corMinCoverage=0 'corMhapOptions=--threshold 0.8 --num-hashes 512 --ordered-sketch-size 1000 --ordered-kmer-size 14
+
+# asseemble the genome with canu trimmed reads
+smartdenovo.pl -t 40 -c 1 -p SFGB1_canuTrimmed_all_smartdenovo SFGB1_canuv1.7_6k.trimmedReads.fasta > SFGE02B1_canuTrimmed_all_smartdenovo.mak
+make -f SFGE02B1_canuTrimmed_all_smartdenovo.mak
+
+# minimap + miniasm assembly
+minimap2 -X -x ava-ont ONT_Clean.fa ONT_Clean.fa > reads.paf
+miniasm -f ONT_Clean.fa reads.paf > SFS_default.gfa
+awk '/^S/{print ">"$2"\n"$3}' SFS_default.gfa | fold > SFS_default.fa
+
+# Hybrid assemling with masurca
+/masurca configuration.txt
+./assemble.sh
+
+# use Racon to polish the genome
+minimap2 -t 80 -x map-ont SFSE02B1_canu_smartdenovo.fa ONT_clean.fq > Racon_reads.paf
+racon -t 80 --bq -1 ONT_clean.fq Racon_reads.paf SFS_canu_smartdenovo.fa SFSE02B1_canu_smartdenovo_Racon.fa
+
+# pilon error correction with Illumina reads
+bowtie2-build -f SFGE02B1_canu+smartdenovo_Racon5th.fa SFS --threads 12
+bowtie2 -p 80 -D 20 -R 2 -N 1 -L 18 -i S,1,0.50 --maxins 1200 -x SFS -1 SFS_500bp_trim_1.fq -2 SFS_500bp_trim_2.fq 1>SFSPE500.sam 2> SFSPE500.err
+grep -E "@|NM:" SFSPE500.sam | grep -v "XS:" > SFSPE500_uniq.sam
+samtools view -bS SFSPE500_uniq.sam > SFSPE500_uniq.bam -@ 8
+samtools sort SFSPE500_uniq.bam -m 5G -@ 8 > SFSPE500_uniq_sorted.bam
+java -jar picard.jar MarkDuplicates I= SFSPE500_uniq_sorted.bam O= SFSPE500_uniq_sorted_dedupe.bam METRICS_FILE=metrics.txt
+samtools index SFSPE500_uniq_sorted_dedupe.bam
+java -Xmx1200G -jar pilon-1.13.jar --genome SFS_canu+smartdenovo_Racon5th.fa --frags SFSPE500_uniq_sorted_dedupe.bam --diploid --threads 80
+
+# using BUSCO to check the genome completeness
+python3 run_BUSCO.py -i genome.scf.fasta -o SFGE02B1_busco -l ~/datasets/metazoa_odb9 -m genome -c 40
+#### missing BUSCOs in Chrysomallon squamiferum genome.
+EOG091G06YD; EOG091G0CEK; EOG091G0E3F; EOG091G0E5P; EOG091G0GA8; EOG091G0H6J; EOG091G0IZD; EOG091G0JC7; EOG091G0M09; EOG091G0MBX; EOG091G0O4W; EOG091G0QBN; EOG091G0RWI; EOG091G0T3D; EOG091G0TAC; EOG091G0UQ0; EOG091G0VVZ; EOG091G0W86; EOG091G0Y35; EOG091G0Z7J; EOG091G113O; EOG091G141O; EOG091G18B1; EOG091G18BK
+####
+
+# using HiCpro to assess the quality of HiC library
+~/App/hicpro/bin/HiC-Pro_2.11.0-beta/bin/utils/digest_genome.py -r mboi -o csq_mobI.bed Csq_KR_v1.0.fa
+bowtie2-build --threads 40 Csq_KR_v1.0.fa csq
+~/App/hicpro/bin/HiC-Pro_2.11.0-beta/bin/HiC-Pro -c config.txt -I fastq2 -o two -s mapping -s proc_hic -s quality_checks
+
+### processing the HiC valid reads by Juicer pipeline
+# index the reference
+faSize -detailed Csq_KR_v1.0.fa >csq.fa.sizes
+bwa index Csq_KR_v1.1.fa
+~/GitHub/juicer/misc/generate_site_positions.py "MboI" "csq" Csq_v1.1.fa
+~/GitHub/juicer/CPU/juicer.sh \
+     -t 40 \
+     -z ./ref/Csq_v1.1.fa \
+     -p ./ref/Csq_v1.1.fa.sizes \
+     -y ./ref/csq_MboI.txt
+faSize -detailed Csq_KR_v1.0.fa >csq.fa.sizes
+bwa index Csq_KR_v1.1.fa
+~/GitHub/juicer/misc/generate_site_positions.py "MboI" "csq" Csq_v1.1.fa
+~/GitHub/juicer/CPU/juicer.sh \
+     -t 40 \
+     -z ./ref/Csq_v1.1.fa \
+     -p ./ref/Csq_v1.1.fa.sizes \
+     -y ./ref/csq_MboI.txt
+
+# genomic scaffolding with 3D de novo assembly pipeline
+~/App/3d2/3d-dna/run-asm-pipeline.sh -m diploid -s finalize -r 1 ../reference/Csq_KR_v1.0.fa ../aligned/merged_nodups.txt
+
+# de novo transcriptome assembly by Trinity
+~/App/trinityrnaseq-Trinity-v2.5.1/Trinity --seqType fq --max_memory 800G --CPU 18 --min_contig_length 300 --samples_file samp_file.txt --output SFG_E02B1_trinity
+~/App/cdhit-master/cd-hit-est -i Trinity.fasta -o Trinity_cdhit0.97.fasta -c 0.97 -T 24 -M 300000
+
+# genome guided transcriptome assembly by Trinity
+~/App/hisat2-2.1.0/hisat2-build SFGE02B1_smart+miniasm_pilon_Euk.fasta SFGB1_smart+miniasm_pilon_Euk
+~/App/hisat2-2.1.0/hisat2 -q -X 800 -p 40 -x SFGE02B1_smart+miniasm_pilon_Euk -1 ../Karei_trim_1.fq -2 ../Karei_trim_2.fq -S karei_all.sam
+samtools view -bS karei_all.sam >karei_all.bam -@ 10
+samtools sort karei_all.bam -m 5G -@ 10 >karei_all.sorted.sam
+samtools index karei_all.sorted.sam
+~/App/trinityrnaseq-Trinity-v2.6.5/Trinity --genome_guided_bam karei_all.sorted.bam --max_memory 300G --genome_guided_max_intron 20000 --CPU 12
+
+## using PASA to build a comprehensive transcriptome database, combining the denovo assembly and genome-guided assembly.
+cat Trinity.fasta Trinity-GG.fasta >Trinity_all_new.fasta
+~/App/PASApipeline-pasa-v2.2.0/seqclean/seqclean/seqclean Trinity_all_new.fasta -c 8
+~/App/PASApipeline-pasa-v2.2.0/seqclean/seqclean/seqclean Trinity.fasta -c 8
+~/App/PASApipeline-pasa-v2.2.0/misc_utilities/accession_extractor.pl < Trinity.fasta.clean >tdn.accs
+~/App/PASApipeline-pasa-v2.2.0/scripts/Launch_PASA_pipeline.pl -c alignAssembly.config -C -R -g SFGB1_smart+miniasm_pilon_Euk.fasta -t Trinity_all_new.fasta.clean -T -u Trinity_all_new.fasta --TDN tdn.accs --ALIGNERS gmap,blat --CPU 4 --annots_gff3 SFGB1v0.2_ONT_maker_transcripts.gff --stringent_alignment_overlap 30.0 --gene_overlap 50.0
+~/App/PASApipeline-pasa-v2.2.0/scripts/build_comprehensive_transcriptome.dbi -c alignAssembly.config -t Trinity_all_new.fasta.clean --min_per_ID 95 --min_per_aligned 30
+
+# Check the genome assembly quality by Quast
+quast.py ../Csq_v1.1.fa --nanopore ../ONT_Raw_reads/All_6kb.fa -t 5
+
+# RepeatModeler:
+~/App/RepeatModeler/BuildDatabase -name SFGE02B1v0.1 SFGE02B1_Racon5_pilon2.fa
+~/App/RepeatModeler/RepeatModeler -database SFGE02B1v0.1 -pa 48
+
+#RepeatMasker
+RepeatMasker -lib ../RM_3672.SunJul81020052018/consensi.fa.classified -pa 40 -div 30 SFGE02B1_Racon5_pilon2.fa
+RepeatMasker -species all -pa 40 -div 30 SFGE02B1_Racon5_pilon2.fa.masked
+
+# how to train Augustus gene predictor
+#Augustus:
+perl ~/App/augustus-3.1/scripts/gff2gbSmallDNA.pl ../SFGB1-augu.gff ../../Csq_v1.0.fasta.masked.masked 1000 Csq_augustus_v01
+perl ~/App/augustus-3.1/scripts/new_species.pl --species Chrysomallon
+etraining --species=Chrysomallon Csq_augustus_v01 --/genbank/verbosity=2
+perl ~/App/augustus-3.1/scripts/gff2gbSmallDNA.pl ../SFGB1-augu.gff ../../Csq_v1.0.fasta.masked.masked 1000 Csq_augustus_v01 --bad=blackList.txt
+etraining --species=Chrysomallon Csq_augustus_v01 --/genbank/verbosity=2
+perl /home/jin/App/augustus-3.1/scripts/optimize_augustus.pl --cpus=40 --species=Chrysomallon Csq_augustus_v02
+etraining --species=Chrysomallon Csq_augustus_v04
+
+# maker annotation
+fasta_tool --chunks 20 Csq_v1.0.fasta
+maker -base SFGB1v1.0 -quiet -g Csq_canu+smartdenovo_Racon5Pilon2_clean_19.fasta
+gff3_merge -l -d SFGB1v1.0_master_datastore_index.log -o SFGB1v1.0.gff
+fasta_merge -d SFGB1v1.0_master_datastore_index.log -o SFGB1v1.0
+
+# blast the whole NCBI nr database
+blastp -num_threads 96 -query SFGB1v1.0.maker.proteins_clean.fa -db ~/db/nr20180831/nr_database -out SFGv1.0_maker_Blastp.m5 -outfmt 5 -evalue 1e-5 -word_size 3 -num_alignments 20 -max_hsps 20 -show_gis
+
+# using salmon to quantify the gene expression
+salmon index -t SFGB1v1.0.transcripts.fasta -i SFG_Trinity_Genes_index --type quasi -k 31
+salmon quant -i SFG_Trinity_Genes_index -l IU -1 ../B1AM_trim_1.fq -2 ../B1AM_trim_2.fq --seqBias -o B1-AM
+
+# Assign the orthologue genes by Orthomcl
+/home/jin/App/orthomclSoftware-v2.0.9/bin/orthomclInstallSchema orthomcl.config install_schema.log
+/home/jin/App/orthomclSoftware-v2.0.9/bin/orthomclAdjustFasta Csq SFGB1v1.0.maker.proteins_clean.fa 1
+mkdir Mollusca
+/home/jin/App/orthomclSoftware-v2.0.9/bin/orthomclFilterFasta Mollusca/ 50 20 SFG_good_prot SFG_poor_prot
+makeblastdb -in SFG_good_prot -dbtype prot -max_file_sz 100000000000
+blastp -db SFG_good_prot -query SFG_good_prot -evalue 1e-5 -out SFG_good_prot.tsv -outfmt 6 -num_threads 12
+/home/jin/App/orthomclSoftware-v2.0.9/bin/orthomclBlastParser SFG_good_prot.tsv Mollusca/ >>similarSequences.txt
+/home/jin/App/orthomclSoftware-v2.0.9/bin/orthomclLoadBlast orthomcl.config similarSequences.txt
+/home/jin/App/orthomclSoftware-v2.0.9/bin/orthomclPairs orthomcl.config orthomcl_pairs.log cleanup=no
+/home/jin/App/orthomclSoftware-v2.0.9/bin/orthomclDumpPairsFiles orthomcl.config
+mcl mclInput --abc -I 1.5 -o mclOutput
+/home/jin/App/orthomclSoftware-v2.0.9/bin/orthomclMclToGroups SFG_ortho 1 < mclOutput > SFG-orthologs_groups.txt
+
+# phylogenetic analysis with Raxml
+~/App/standard-RAxML/raxmlHPC-PTHREADS -f a -x 936 -m PROTGAMMAGTR -p 834 -N 100 -s SuperMatrix.fas -n SFG-Lophotro.tre -O -T 96 -q Partition_raxml.txt
+
+## Calibrate the tree with time constrains, estimate the divergent time by MCMCTree
+~/App/PAML_4.8/codeml codeml.ctl
+# in the mcmctree.ctl, change usedata = 3, and outfile = out_usedata3
+~/App/PAML_4.8/mcmctree mcmctree.ctl
+# change the file name "out.BV" to  "in.BV"; change usedata = 2, and outfile = out_usedata2
+~/App/PAML_4.8/mcmctree mcmctree.ctl
+# the tree file with time constrains used in MCMCTree analysis
+19 1
+((Oct,(((Pye,Cfa),((Cgi,Pfu),(Mph,Bpl)))'L(4.65, 0.1, 1.0, 1e-300)',(((Hal,Csq),Lot),((Lan,Pca)'U(1.50, 0.1, 1.0, 1e-300)',(Apl,(Rau,Bio))'B(1.686, 4.734, 1e-300, 0.1)')'L(3.90, 0.1, 1.0, 1e-300)')'B(4.702, 5.315, 1e-300, 0.1)'))'B(5.32, 5.49, 1e-300, 0.1)',((Ctel,Nge),(Lin,Pau)'L(5.13)'))'B(5.5025, 6.361, 1e-300, 1e-300)';
+### the mcmctree.ctl file
+          seed = -1
+       seqfile = SFG_MCMC.phy
+      treefile = Raxml_PE_fossils.nwk
+       outfile = out_usedata2
+
+       seqtype = 2
+
+         ndata = 1
+       usedata = 2    * 0: no data; 1:seq like; 2:normal approximation
+         clock = 2    * 1: global clock; 2: independent rates; 3: correlated rates
+       RootAge = '<10'  * constraint on root age, used if no fossil for root.
+         model = 3
+                   * models for codons:
+                       * 0:one, 1:b, 2:2 or more dN/dS ratios for branches
+                   * models for AAs or codon-translated AAs:
+                       * 0:poisson, 1:proportional, 2:Empirical, 3:Empirical+F
+                       * 6:FromCodon, 7:AAClasses, 8:REVaa_0, 9:REVaa(nr=189)
+
+    aaRatefile = lg.dat  * only used for aa seqs with model=empirical(_F)
+                   * dayhoff.dat, jones.dat, wag.dat, mtmam.dat, or your own
+
+         alpha = 0.5
+         ncatG = 5
+     cleandata = 1    * remove sites with ambiguity data (1:yes, 0:no)?
+
+       BDparas = 1 1 0   * birth, death, sampling
+   kappa_gamma = 6 2      * gamma prior for kappa
+   alpha_gamma = 1 1      * gamma prior for alpha
+
+   rgene_gamma = 1 20.75     * gamma prior for rate for genes
+  sigma2_gamma = 1 4.5    * gamma prior for sigma^2     (for clock=2 or 3)
+
+      finetune = 1: 0.057  0.25  0.008  0.12 0.3  * times, rates, mixing, paras, RateParas
+
+         print = 1
+        burnin = 10000000
+      sampfreq = 1000
+       nsample = 10000
+##########
+
+# using CAFE for the gene family analysis
+~/App/CAFE-4.0.1/release/cafe cafe4.sh
+#in cafe4.sh
+load -i CAFE4_input.txt -t 4 -l logfile.txt -p 0.01
+tree (Lin:6.517712,(Oct:5.586937,((((Pfu:2.803395,Cgi:2.803395):0.900184,(Mph:1.049561,Bpl:1.049561):2.654018):0.340926,(Pye:0.328239,Cfa:0.328239):3.716266):1.195965,((Lot:4.414658,(Hal:3.764952,Csq:3.764952):0.649707):0.377249,((Pca:1.327368,Lan:1.327368):2.730936,(Apl:2.159281,(Rau:1.334979,Bio:1.334979):0.824302):1.899023):0.733604):0.448563):0.346466):0.930775);
+lambda -s (1,(1,((((1,1),(1,1)),(1,1)),((1,(1,1)),((1,1),(1,(1,1)))))));
+report resultfile_IdentiLamm
+
+############
+# the Rscript for the circos plot
+# Csq_v1.1.fa.sizes.bed
+chr1	1	49219174
+chr2	1	16871289
+chr3	1	22472794
+chr4	1	16731779
+chr5	1	19579237
+chr6	1	42400280
+chr7	1	36868729
+chr8	1	35804613
+chr9	1	30197626
+chr10	1	17691409
+chr11	1	17528639
+chr12	1	18913716
+chr13	1	28279498
+chr14	1	20211343
+chr15	1	31707104
+
+
+library(circlize)
+library(dplyr)
+cytoband = read.table("Csq_v1.1.fa.sizes.bed", colClasses = c("character", "numeric","numeric"), sep = "\t")
+
+gene_track=read.csv("csq.bed", sep="\t", header = F)
+
+
+brewer=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854")
+
+#### one block
+
+readcq<- function(filename){
+  CQ=read.csv(filename,header=F, sep=",")
+  colnames(CQ)=c("gene", "FC")
+  CQ=merge(gene_track, CQ, by.x="V4", by.y="gene")
+  CQ=CQ[, c(2,3,4,7)]
+
+  return(CQ)
+}
+####
+FE=readcq("FE.csv")
+M=readcq("M.csv")
+
+
+### normalize the track using gene density
+
+gene_density=genomicDensity(gene_track, window.size = 1e6)
+
+get_density<-function(CQ){
+
+  CQ_density=genomicDensity(CQ, window.size = 1e6)
+  CQ_density=merge(CQ_density, gene_density, by.x=c(1,2,3), by.y=c(1,2,3))
+  CQ_density$pct=CQ_density$pct.x/CQ_density$pct.y
+  CQ_density=CQ_density[, c(1,2,3,6)]
+  CQ_density=arrange(CQ_density, chr, start)
+
+  return(CQ_density)
+}
+
+
+M_density=get_density(M)
+FE_density=get_density(FE)
+
+
+### plot M, save as 5*5
+#### from the beginning
+circos.clear()
+circos.par("start.degree" = 90)
+circos.initializeWithIdeogram(cytoband, sort.chr = FALSE, plotType = c("axis", "labels"))
+
+circos.genomicTrackPlotRegion(M_density,  ylim=c(0,0.6), panel.fun = function(region, value, ...) {
+  circos.genomicLines(region, value, col=brewer[4], area=TRUE, type="l")
+} , track.height = 0.2)
+circos.yaxis(labels.cex = 0.1, side=("right"))
+
+# plot FE, save as 5*5
+circos.clear()
+circos.par("start.degree" = 90)
+circos.initializeWithIdeogram(cytoband, sort.chr = FALSE, plotType = c("axis", "labels"))
+
+circos.genomicTrackPlotRegion(FE_density,  ylim=c(0,0.6), panel.fun = function(region, value, ...) {
+  circos.genomicLines(region, value, col=brewer[5], area=TRUE, type="l")
+} , track.height = 0.2)
+circos.yaxis(labels.cex = 0.1, side=("right"))
+
+
+######
+### gene density for the orphan/novel genes
+### get the pos list from the raw bed file
+orphan=read.csv("orphan_genes.csv", header=F)
+colnames(orphan)=c("gene")
+gene_track=read.csv("csq.bed", sep="\t", header = F)
+colnames(gene_track)=c("chro", "start", "end", "gene", "score", "strand")
+
+orphan_pos=merge(orphan, gene_track, by="gene")
+orphan_pos=orphan_pos[2:4]
+
+orphan_density=get_density(orphan_pos)
+
+
+####
+circos.clear()
+circos.par("start.degree" = 90)
+circos.initializeWithIdeogram(cytoband, sort.chr = FALSE, plotType = c("axis", "labels"))
+
+circos.genomicTrackPlotRegion(orphan_density,  ylim=c(0,0.7), panel.fun = function(region, value, ...) {
+  circos.genomicLines(region, value, col="grey", area=TRUE, type="l")
+} , track.height = 0.2)
+circos.yaxis(labels.cex = 0.1, side=("right"))
+
+
+
+#####################
+# 2. OrthoMCL results
+## Speicies Abbreviation: Apl, Aplysia californica; Bio, Biomphalaria glabrata; Bpl, Bathymodiolus platifrons; Cfa, Azumapecten farreri; Cgi, Crassostrea gigas; Csq, Chrysomallon squamiferum; Hal, Haliotis discus hannai; Lan, Lanistes nyassanus; Lin, Lingula anatina; Lot, Lottia gigantea; Mph, Modiolus philippinarum; Oct, Octopus bimaculoides; Pca, Pomacea canaliculata; Pfu, Pinctada fucata; Pye, Mizuhopecten yessoensis; Rau, Radix auricularia.
+
+https://static-content.springer.com/esm/art%3A10.1038%2Fs41467-020-15522-3/MediaObjects/41467_2020_15522_MOESM12_ESM.txt
