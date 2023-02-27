@@ -4,7 +4,8 @@ Pipeline overview
 1. OrthoDB (orthologer) mapping
 2. OrthoDB database tidying
 3. Build a tree for CAFE
-3. CAFE
+4. CAFE
+5. Enrichment
 
 ## 1. OrthoDB (orthologer) mapping
 
@@ -119,8 +120,7 @@ while read line
  do
  grep -w $line Tmax_Mollusca_OG2gene.tab | cut -f2 > ./SingCopyOG_14_genelist/${line}_genelist.txt
  done < Mollusca_SingCopyOG_14_OG
-# all mollusca Single copy OG sequences
-grep -Fwf Mollusca_SingCopyOG_14_OG Tmax_Mollusca_OG2gene.tab | cut -f2 > Tmax_Mollusca_all_geneID
+
 ```
 
 3. Retrieve sequences
@@ -228,7 +228,7 @@ sed 's/6454_0/Haliotis_rufescens/g; s/6500_0/Aplysia_californica/g; s/6526_0/Bio
 
 
 
-#### CAFE
+#### 4. CAFE
 
 Install CAFE from conda in the enviroment cafe
 
@@ -247,10 +247,13 @@ cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultramet
 
 
 #-p Use a Poisson distribution for the root frequency distribution. If no -p flag is given, a uniform distribution will be used
+# the best (lowest) likelihood score???
+nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 1 -p -c 6 -o k1p&
 nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 3 -p -c 6 -o k3p&
 nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 2 -p -c 2 -o k2p&
 nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 4 -p -c 2 -o k4p&
-nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 5 -p -c 2 -o k5p&
+nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 5 -p -c 2 -o k5p& # failed
+nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 6 -p -c 2 -o k6p& # failed
 
 ```
 
@@ -273,31 +276,140 @@ echo "end;">>Significant_trees.tre # 6794 trees
 echo $'#nexus\nbegin trees;'>Tmax_Significant_trees.tre
 grep -F "<17>*" Gamma_asr.tre >>Tmax_Significant_trees.tre
 echo "end;">>Tmax_Significant_trees.tre # 2994 trees
+# Get the gene family IDs that have significant changes in Tmax
+grep -o "\w*at6447\w*" Tmax_Significant_trees.tre > Tmax_Significant_trees_IDs
+
+# Get the gene family expaned in Tmax
+cat Gamma_change.tab |cut -f1,19|grep "+[1-9]" >Tmax.expanded # 1969
+# Get the gene family extracted in Tmax
+cat Gamma_change.tab |cut -f1,19|grep "-" >Tmax.contracted # 1925
+
+############ ############ This method has a caveat ############ ############
+############ If the gene gamily is significantly changed but not in Tmax, it will still count ############
+# Get the list of significant changed gene family IDs  
+#grep "at6447" Significant_families.txt | cut -f1 > Sig_at_p.05_IDs #6794
+#  Get the gene family SIGNIFICANTLY expaned in Tmax
+#grep -Fwf Sig_at_p.05_IDs Tmax.expanded | cut -f1 > Tmax.expanded.Sig_at_p.05 #1418
+#  Get the gene family SIGNIFICANTLY contracted in Tmax
+#grep -Fwf Sig_at_p.05_IDs Tmax.contracted | cut -f1 > Tmax.contracted.Sig_at_p.05  #1614
+
+############ Significant Branch on the Tree ########################
+#  Get the gene family SIGNIFICANTLY expaned in Tmax
+grep -Fwf Tmax_Significant_trees_IDs Tmax.expanded | cut -f1 > Tmax.expanded.Sig.treebranch #1417
+#  Get the gene family SIGNIFICANTLY contracted in Tmax
+grep -Fwf Tmax_Significant_trees_IDs Tmax.contracted | cut -f1 > Tmax.contracted.Sig.treebranch  #1577
+
+############# ############ Valid the method, USE significant branches ############ ############
+#grep -vFwf Tmax.expanded.Sig.treebranch Tmax.expanded.Sig_at_p.05 #3453at6447
+# Visualize the tree on http://etetoolkit.org/treeview/
+#grep -w "3453at6447" Gamma_asr.tre # obviously not expanded in Tmax
+
 ```
 
 
 Setting λ to a previously estimated value to deal with families with large numbers of gene copies
 
-check Model Gamma Final Likelihood (-lnL) in Gamma_results.txt from different runs (k2p，k3p，k5p，k6p), select the largest as the best
+check Model Gamma Final Likelihood (-lnL) in Gamma_results.txt from different runs (k2p，k3p，k5p，k6p), select the largest??? as the best
 ```bash
-cat Gamma_change.tab |cut -f1,15|grep "+[1-9]" >sample.expanded #提取Gamma_change.tab第15列代表物种sample的扩张的orthogroupsID
-cat Gamma_change.tab |cut -f1,15|grep "-" >sample.contracted  #提取Gamma_change.tab第15列代表物种sample的收缩的orthogroupsID
-cat Gamma_family_results.txt |grep "y"|cut -f1 >p0.05.significant #提取显著扩张或收缩的orthogroupsID
-grep -f p0.05.significant sample.expanded |cut -f1>sample.expanded.significant #提取显著扩张的sample物种的orthogroupsID
-grep -f p0.05.significant sample.contracted |cut -f1 >sample.contracted.significant #提取显著收缩的sample物种的orthogroupsID
-
-grep -f sample.expanded.significant ./OrthoFinder/Results_Oct14/Orthogroups/Orthogroups.txt |sed "s/ /\n/g"|grep "bv" |sort -k 1.3n |uniq >sample.expanded.significant.genes #提取显著扩张的基因列表，假设基因ID是bv的前缀。
-grep -f sample.contracted.significant ./OrthoFinder/Results_Oct14/Orthogroups/Orthogroups.txt sed "s/ /\n/g"|grep "bv" |sort -k 1.3n |uniq >sample.contracted.significant.genes #提取显著收缩的基因列表，假设基因ID是bv的前缀。
-
-seqkit grep -f sample.expanded.significant.genes sample.pep.fa >sample.expanded.significant.pep.fa #提取显著扩张的基因序列
-seqkit grep -f sample.contracted.significant.genes sample.pep.fa >sample.contracted.significant.pep.fa #提取显著收缩的基因序列
-# 提取出指定物种的显著扩张和收缩的蛋白序列之后，就可以拿去做GO注释和基因富集分析
-
 #把每个节点收缩扩张的基因数量画在树上
 # R package ggtree
 https://yanzhongsino.github.io/2022/01/24/bioinfo_evolutionary.tree_ggtree/
 ```
 
+## 5. Functional Enrichment
+Gene Family Functional Description Metadata:
+*Mollusca_GeneFamily_metadata.tsv* obtained from */Users/ruiqi/OneDrive - UCB-O365/GiantClamGenome/GeneFamily/GeneCount/OG2speciesID2count.R*
+
+Get the contracted gene family data:
+
+`head -1 ../Mollusca_GeneFamily_metadata.tsv > Tmax.contracted.genefamily.annotation.tsv`
+`grep -Fwf Tmax.contracted.Sig.treebranch ../Mollusca_GeneFamily_metadata.tsv >> Tmax.contracted.genefamily.annotation.tsv`
+
+Get the expanded gene family data:
+`head -1 ../Mollusca_GeneFamily_metadata.tsv > Tmax.expanded.genefamily.annotation.tsv`
+`grep -Fwf Tmax.expanded.Sig.treebranch ../Mollusca_GeneFamily_metadata.tsv >> Tmax.expanded.genefamily.annotation.tsv`
+
+### Annotation of Tmax with emapper
+```bash
+conda activate emapper
+outputdir=/home/ruiqi/ruiqi_data/GiantClamGenome/TmaximaGenomeReannotation/Tmax_ReAnn_emapper
+input=/home/ruiqi/ruiqi_data/GiantClamGenome/TmaximaGenomeReannotation/Tmax_ReAnn.fasta
+db=/home/ruiqi/ruiqi_data/emapper/databases
+nohup emapper.py -m diamond --output_dir $outputdir -o Tmax_ReAnn --cpu 40 -i $input --data_dir $db&
+cat Tmax_ReAnn.emapper.annotations | sed '/^#/d' > Tmax_ReAnn.clean.annotations
+```
+### Retrieve gene sequences for all gene families, then construct gene trees
+
+Retrieve sequences
+
+```bash
+# get the mollusca OG list  
+cat Mollusca_OG2Ann.tab | cut -f1 > Mollusca_OG_IDs
+mkdir Mollusca_Tmax_genelist
+# grep each OG and save to gene Id to a file
+while read line
+ do
+ grep -w $line Tmax_Mollusca_OG2gene.tab | cut -f2 > ./Mollusca_Tmax_genelist/${line}_genelist.txt
+ done < Mollusca_OG_IDs
+
+### Retrieve sequences (Use Tmax_Mollusca.fasta from the step 3)
+# Environment cdbtools
+conda activate cdbtools
+mkdir Mollusca_Tmax_seqs
+# Retrieve seqs from each OG and save to separate fasta files
+for file in ./Mollusca_Tmax_genelist/*_genelist.txt
+do
+  filename=`basename $file`
+  name=${filename%_*}
+  echo $name
+  cat $file | cdbyank Tmax_Mollusca.fasta.cidx > ./Mollusca_Tmax_seqs/${name}.fasta
+done
+```
+
+Construct gene trees
+conda enviroment: exon
+pwd: /home/ruiqi/ruiqi_data/GiantClamGenome/OrthoDB/Mollusca_Tmax_seqs
+script: *Phylogeny_Tmax_genetree.sh*
+
+
+```bash
+#!/bin/bash
+### Alignment
+# align each gene separately,
+while read name;
+do mafft ${name}.fasta > $name.output
+  sed -i 's/:/_/g' $name.output
+  trimal -in $name.output -out ${name}_trimmed.output -automated1
+done < Mollusca_OG_IDs
+
+mkdir Phylogeny_GeneTree_IntermediateFiles
+mkdir GeneTrees
+cd Phylogeny_GeneTree_IntermediateFiles
+# Phylogeny
+while read name;
+do
+  run1=${name}_run1
+  run2=${name}_run2
+  run=${name}
+  raxmlHPC-PTHREADS -T 40 -p 12345 -N 20 -s ../${name}_trimmed.output -m PROTGAMMAWAG -n $run1
+  raxmlHPC-PTHREADS -T 40 -p 12345 -b 12345 -s ../${name}_trimmed.output -N 100 -m PROTGAMMAWAG -n $run2
+  raxmlHPC-PTHREADS -T 40 -f b -t RAxML_bestTree.${run1}  -z RAxML_bootstrap.${run2} -m PROTGAMMAWAG -n $run
+  cp RAxML_bipartitions.${name} ../GeneTrees/${name}_GeneTree.tre
+done < ../Mollusca_OG_IDs
+
+mkdir TrimmedAlignment_GeneTree
+mv *_trimmed.output TrimmedAlignment_GeneTree/
+mkdir Alignment_GeneTree
+mv *.output Alignment_GeneTree/
+mkdir Mollusca_Tmax_fasta
+mv *.fasta Mollusca_Tmax_fasta/
+```
+
+
+
+### GO/KEGG enrichment
+1. Get Tmax gene IDs that are clustered to mollusca gene families  (Universe)
+2. Get Tmax gene IDs that below to expanded/contracted gene families
 
 
 [CAFE Tutorial](https://evomics.org/wp-content/uploads/2016/06/cafe_tutorial-1.pdf)
@@ -311,3 +423,9 @@ https://yanzhongsino.github.io/2022/01/24/bioinfo_evolutionary.tree_ggtree/
 [OrthoFinder-CAFE pipeline in Chinese](https://www.yuque.com/shawn-yepfo/oxua15/ftrlin)
 
 [CAFE in Chinese](https://yanzhongsino.github.io/2021/10/29/bioinfo_gene.family_CAFE5/)
+
+Name Code Replacement
+### species ID to name replacement
+```bash
+sed -i 's/6454_0/Haliotis_rufescens/g; s/6500_0/Aplysia_californica/g; s/6526_0/Biomphalaria_glabrata/g; s/6565_0/Crassostrea_virginica/g; s/6573_0/Mizuhopecten_yessoensis/g; s/6579_0/Pecten_maximus/g; s/6596_0/Mercenaria_mercenaria/g; s/29159_0/Crassostrea_gigas/g; s/36100_0/Haliotis_rubra/g; s/37623_0/Ostrea_edulis/g; s/37653_0/Octopus_bimaculoides/g; s/225164_0/Lottia_gigantea/g; s/400727_0/Pomacea_canaliculata/g; s/1735272_0/Gigantopelta_aegis/g; s/2607531_0/Octopus sinensis/g; s/Tmax/Tridacna_maxima/g' file
+```
