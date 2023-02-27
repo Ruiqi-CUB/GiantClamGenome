@@ -230,8 +230,84 @@ sed 's/6454_0/Haliotis_rufescens/g; s/6500_0/Aplysia_californica/g; s/6526_0/Bio
 
 #### CAFE
 
+Install CAFE from conda in the enviroment cafe
+
+pwd:*/home/ruiqi/ruiqi_data/GiantClamGenome/OrthoDB/CAFE_Tmax_mollusca*
+
+Run CAFE 5
+```bash
+# -t parameter specifies a file containing the tree that CAFE uses
+# -i parameter specifies a list of gene families
+# -c Number of processing cores to use
+# -k 3 To incorporate among family rate variation with both lambda and alpha estimated and three discrete gamma rate categories
+# FAILED: Failed to initialize any reasonable values
+#cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 3 -c 6 -l 0.0001 -o k3
+# -l 0.0001 --fixed_lambda, -l :Value (between 0 and 1) for a single user provided lambda value, otherwise lambda is estimated
+cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 3 -c 6 -l 0.0001 -o k3_l1e-4
+
+
+#-p Use a Poisson distribution for the root frequency distribution. If no -p flag is given, a uniform distribution will be used
+nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 3 -p -c 6 -o k3p&
+nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 2 -p -c 2 -o k2p&
+nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 4 -p -c 2 -o k4p&
+nohup cafe5 -i Mollusca_GeneCount.tsv -t Tmax_Mollusca_SCOG14_bestTree.rooted.ultrametric.tre -k 5 -p -c 2 -o k5p&
+
+```
+
+Results Mining
+```bash
+# write the just significant families to a file
+grep "y" Gamma_family_results.txt > Significant_families.txt # 6794
+# filter gene families to a lower p-value (0.01 in the example)
+awk '$2 < .01 {print $0}' Gamma_family_results.txt > Sig_at_p.01.txt
+wc -l Sig_at_p.01.txt #4959
+# From
+#Taxon  Increased Decreased
+#Tmax<17>        1969    1925
+# Only viewing the trees significant changes
+echo $'#nexus\nbegin trees;'>Significant_trees.tre
+grep "*" Gamma_asr.tre >>Significant_trees.tre
+echo "end;">>Significant_trees.tre # 6794 trees
+
+## Only viewing the trees significant changes in Tmax
+echo $'#nexus\nbegin trees;'>Tmax_Significant_trees.tre
+grep -F "<17>*" Gamma_asr.tre >>Tmax_Significant_trees.tre
+echo "end;">>Tmax_Significant_trees.tre # 2994 trees
+```
+
+
+Setting λ to a previously estimated value to deal with families with large numbers of gene copies
+
+check Model Gamma Final Likelihood (-lnL) in Gamma_results.txt from different runs (k2p，k3p，k5p，k6p), select the largest as the best
+```bash
+cat Gamma_change.tab |cut -f1,15|grep "+[1-9]" >sample.expanded #提取Gamma_change.tab第15列代表物种sample的扩张的orthogroupsID
+cat Gamma_change.tab |cut -f1,15|grep "-" >sample.contracted  #提取Gamma_change.tab第15列代表物种sample的收缩的orthogroupsID
+cat Gamma_family_results.txt |grep "y"|cut -f1 >p0.05.significant #提取显著扩张或收缩的orthogroupsID
+grep -f p0.05.significant sample.expanded |cut -f1>sample.expanded.significant #提取显著扩张的sample物种的orthogroupsID
+grep -f p0.05.significant sample.contracted |cut -f1 >sample.contracted.significant #提取显著收缩的sample物种的orthogroupsID
+
+grep -f sample.expanded.significant ./OrthoFinder/Results_Oct14/Orthogroups/Orthogroups.txt |sed "s/ /\n/g"|grep "bv" |sort -k 1.3n |uniq >sample.expanded.significant.genes #提取显著扩张的基因列表，假设基因ID是bv的前缀。
+grep -f sample.contracted.significant ./OrthoFinder/Results_Oct14/Orthogroups/Orthogroups.txt sed "s/ /\n/g"|grep "bv" |sort -k 1.3n |uniq >sample.contracted.significant.genes #提取显著收缩的基因列表，假设基因ID是bv的前缀。
+
+seqkit grep -f sample.expanded.significant.genes sample.pep.fa >sample.expanded.significant.pep.fa #提取显著扩张的基因序列
+seqkit grep -f sample.contracted.significant.genes sample.pep.fa >sample.contracted.significant.pep.fa #提取显著收缩的基因序列
+# 提取出指定物种的显著扩张和收缩的蛋白序列之后，就可以拿去做GO注释和基因富集分析
+
+#把每个节点收缩扩张的基因数量画在树上
+# R package ggtree
+https://yanzhongsino.github.io/2022/01/24/bioinfo_evolutionary.tree_ggtree/
+```
+
+
+
 [CAFE Tutorial](https://evomics.org/wp-content/uploads/2016/06/cafe_tutorial-1.pdf)
+
 [CAFE 5 Turtorial](https://github.com/hahnlab/CAFE5)
+
 [OrthoFinder Species Tree to tree for CAFE](https://github.com/davidemms/OrthoFinder/blob/master/tools/make_ultrametric.py)
+
 [OrthoFinder CAFE pipeline](https://github.com/harish0201/Analyses_Pipelines/blob/main/7.CAFE.sh)
+
 [OrthoFinder-CAFE pipeline in Chinese](https://www.yuque.com/shawn-yepfo/oxua15/ftrlin)
+
+[CAFE in Chinese](https://yanzhongsino.github.io/2021/10/29/bioinfo_gene.family_CAFE5/)
